@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}校时 #{{ row.id }}{% endblock %}
+{% block content %}
+<h1>校时：{{ row.material_id }} 字幕 #{{ row.subtitle_no }}</h1>
+<p class="text">「{{ row.text }}」</p>
+
+<table class="meta">
+  <tr><th>所在段</th><td>第 {{ sel.seq }} 段（素材 {{ sel.material_id }}，原片 {{ sel.start_ms }}–{{ sel.end_ms }} ms）</td></tr>
+  <tr><th>本段成片范围</th><td>{{ seg_final_start|fmt_ms }} – {{ seg_final_end|fmt_ms }}（{{ seg_final_start }}–{{ seg_final_end }} ms），调整不得越出本段</td></tr>
+  <tr><th>当前原字幕</th><td>{{ sub.start_ms|fmt_ms }} – {{ sub.end_ms|fmt_ms }}（{{ sub.start_ms }}–{{ sub.end_ms }} ms），版本 v{{ version }}</td></tr>
+  <tr><th>当前行</th><td>成片 {{ final_start }}–{{ final_end }} ms</td></tr>
+</table>
+
+<form method="post" action="/rows/{{ row.id }}/save" id="adjust">
+  <input type="hidden" name="version" value="{{ version }}">
+
+  <fieldset {% if start_clipped %}disabled{% endif %}>
+    <legend>成片起点（ms）</legend>
+    {% if start_clipped %}
+      <p class="warn">起点被本段切点裁掉，不能调整；保留原片时刻 {{ sub.start_ms }} ms。</p>
+    {% else %}
+      <input type="number" name="final_start_ms" id="final_start_ms"
+             value="{{ final_start }}" min="{{ seg_final_start }}" max="{{ seg_final_end }}" step="1" required>
+      <span class="conv">换算回原片：<b id="src_start"></b> ms</span>
+    {% endif %}
+  </fieldset>
+
+  <fieldset {% if end_clipped %}disabled{% endif %}>
+    <legend>成片终点（ms）</legend>
+    {% if end_clipped %}
+      <p class="warn">终点被本段切点裁掉，不能调整；保留原片时刻 {{ sub.end_ms }} ms。</p>
+    {% else %}
+      <input type="number" name="final_end_ms" id="final_end_ms"
+             value="{{ final_end }}" min="{{ seg_final_start }}" max="{{ seg_final_end }}" step="1" required>
+      <span class="conv">换算回原片：<b id="src_end"></b> ms</span>
+    {% endif %}
+  </fieldset>
+
+  {% if start_clipped and end_clipped %}
+    <p class="warn">本行两端都被切点裁掉，没有可调整的端点。</p>
+  {% else %}
+    <button type="submit">保存并重算相关片段</button>
+  {% endif %}
+  <a class="btn" href="/rows">返回列表</a>
+</form>
+
+<script>
+// 成片时刻 -> 原片时刻：src = 段原片起点 + (成片时刻 - 段成片起点)
+const SEL_SRC_START = {{ sel.start_ms }};
+const SEG_FINAL_START = {{ seg_final_start }};
+function bind(inputId, outId) {
+  const input = document.getElementById(inputId);
+  const out = document.getElementById(outId);
+  if (!input) return;
+  const update = () => {
+    const v = parseInt(input.value, 10);
+    out.textContent = Number.isInteger(v) ? (SEL_SRC_START + (v - SEG_FINAL_START)) : "—";
+  };
+  input.addEventListener("input", update);
+  update();
+}
+bind("final_start_ms", "src_start");
+bind("final_end_ms", "src_end");
+</script>
+{% endblock %}

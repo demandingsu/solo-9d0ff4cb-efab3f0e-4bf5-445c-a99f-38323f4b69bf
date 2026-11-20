@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}成片字幕校时{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav>
+  <strong>成片字幕校时</strong>
+  <a href="/rows">成片字幕行</a>
+  <a href="/upload">上传 CSV</a>
+</nav>
+<main>
+  {% if msg %}<div class="banner ok">{{ msg }}</div>{% endif %}
+  {% if err %}<div class="banner err">{{ err }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

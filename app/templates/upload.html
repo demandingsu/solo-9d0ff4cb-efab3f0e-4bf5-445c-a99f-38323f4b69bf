@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}上传 CSV{% endblock %}
+{% block content %}
+<h1>上传 CSV</h1>
+<p class="hint">
+  当前库内：原片字幕 {{ counts.subtitles }} 条，选段 {{ counts.selections }} 段，成片行 {{ counts.final_rows }} 行。
+  上传会整体替换对应数据并全量重算成片行；解析失败则保持原数据不变。
+</p>
+
+<section>
+  <h2>原片字幕 CSV</h2>
+  <p>表头：<code>material_id,subtitle_no,start_ms,end_ms,text</code>（或 <code>素材号,字幕号,开始毫秒,结束毫秒,正文</code>）</p>
+  <form method="post" action="/upload/source" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".csv" required>
+    <button type="submit">上传原片字幕</button>
+  </form>
+</section>
+
+<section>
+  <h2>选段 CSV</h2>
+  <p>表头：<code>material_id,start_ms,end_ms</code>（或 <code>素材号,开始毫秒,结束毫秒</code>）。
+     按成片顺序逐行列出，允许同一素材重复出现；各段在成片中首尾相接，区间含起点、不含终点。</p>
+  <form method="post" action="/upload/selections" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".csv" required>
+    <button type="submit">上传选段</button>
+  </form>
+</section>
+
+<section>
+  <h2>本地样例</h2>
+  <p>内置样例中素材 M1 被重复选了两次（第 1、3 段），可用于验证“改一处、各段同步”。</p>
+  <form method="post" action="/load_sample">
+    <button type="submit">载入内置样例</button>
+  </form>
+</section>
+{% endblock %}

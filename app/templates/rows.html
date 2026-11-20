@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}成片字幕行{% endblock %}
+{% block content %}
+<h1>成片字幕行</h1>
+<p class="hint">
+  已保存的成片字幕行，按成片时间排序。每行同时给出成片时间与原片时间。
+  当前库内：原片字幕 {{ counts.subtitles }} 条，选段 {{ counts.selections }} 段。
+  {% if counts.subtitles == 0 or counts.selections == 0 %}
+    请先到<a href="/upload">上传页</a>导入 CSV 或载入样例。
+  {% endif %}
+</p>
+{% if rows %}
+<table>
+  <thead>
+    <tr>
+      <th>#</th><th>段</th><th>素材号</th><th>字幕号</th>
+      <th>成片起</th><th>成片止</th>
+      <th>原片起</th><th>原片止</th>
+      <th>裁切</th><th>正文</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td>{{ r.selection_seq }}</td>
+      <td>{{ r.material_id }}</td>
+      <td>{{ r.subtitle_no }}</td>
+      <td title="{{ r.final_start_ms }} ms">{{ r.final_start_ms|fmt_ms }}<br><small>{{ r.final_start_ms }}</small></td>
+      <td title="{{ r.final_end_ms }} ms">{{ r.final_end_ms|fmt_ms }}<br><small>{{ r.final_end_ms }}</small></td>
+      <td title="{{ r.src_start_ms }} ms">{{ r.src_start_ms|fmt_ms }}<br><small>{{ r.src_start_ms }}</small></td>
+      <td title="{{ r.src_end_ms }} ms">{{ r.src_end_ms|fmt_ms }}<br><small>{{ r.src_end_ms }}</small></td>
+      <td>
+        {% if r.start_clipped %}<span class="tag">起被裁</span>{% endif %}
+        {% if r.end_clipped %}<span class="tag">止被裁</span>{% endif %}
+        {% if not r.start_clipped and not r.end_clipped %}—{% endif %}
+      </td>
+      <td class="text">{{ r.text }}</td>
+      <td><a class="btn" href="/rows/{{ r.id }}">校时</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>暂无成片字幕行。</p>
+{% endif %}
+{% endblock %}
