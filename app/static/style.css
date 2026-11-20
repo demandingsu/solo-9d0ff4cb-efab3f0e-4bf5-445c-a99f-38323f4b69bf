@@ -28,3 +28,13 @@ input[type=number] { width: 140px; padding: 4px 6px; font-size: 14px; }
 section { background: #fff; border: 1px solid #e0e0e0; border-radius: 4px; padding: 12px 16px; margin-bottom: 16px; }
 code { background: #eceff1; padding: 1px 4px; border-radius: 3px; }
 table.meta th { width: 120px; }
+.tag.ok { background: #e6f4ea; border-color: #a5d6a7; color: #1b5e20; }
+.gap { margin-bottom: 4px; }
+.btn-small { background: #2e7d32; color: #fff; border: none; border-radius: 4px;
+             padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.btn-small:hover { background: #1b5e20; }
+.btn-small[disabled] { background: #bdbdbd; cursor: not-allowed; }
+.btn-small.danger { background: #c62828; }
+.btn-small.danger:hover { background: #8e0000; }
+.link { display: inline-block; margin-top: 6px; font-size: 12px; color: #1565c0; }
+td.gaps { min-width: 150px; }

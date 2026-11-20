@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}核看登记 {{ sub.material_id }} #{{ sub.subtitle_no }}{% endblock %}
+{% block content %}
+<h1>核看登记：{{ sub.material_id }} 字幕 #{{ sub.subtitle_no }}</h1>
+<p class="text">「{{ sub.text }}」</p>
+
+<table class="meta">
+  <tr><th>当前原字幕</th><td>{{ sub.start_ms|fmt_ms }} – {{ sub.end_ms|fmt_ms }}（{{ sub.start_ms }}–{{ sub.end_ms }} ms），版本 v{{ sub.version }}</td></tr>
+  <tr><th>登记笔数</th><td>{{ marks|length }} 笔；同一原字幕的多笔登记合并计算各选段覆盖，撤销单笔后仍被其他登记覆盖的部分保持已核看</td></tr>
+</table>
+
+{% if marks %}
+<table>
+  <thead>
+    <tr><th>登记 #</th><th>原片起</th><th>原片止</th><th>登记时间（UTC）</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for m in marks %}
+    <tr>
+      <td>{{ m.id }}</td>
+      <td title="{{ m.src_start_ms }} ms">{{ m.src_start_ms|fmt_ms }}<br><small>{{ m.src_start_ms }}</small></td>
+      <td title="{{ m.src_end_ms }} ms">{{ m.src_end_ms|fmt_ms }}<br><small>{{ m.src_end_ms }}</small></td>
+      <td>{{ m.created_at }}</td>
+      <td>
+        <form method="post" action="/reviews/{{ m.id }}/delete">
+          <button type="submit" class="btn-small danger">撤销这笔</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>暂无核看登记。到<a href="/rows">成片字幕行</a>点「已核看」即可登记。</p>
+{% endif %}
+
+<p><a class="btn" href="/rows">返回列表</a></p>
+{% endblock %}

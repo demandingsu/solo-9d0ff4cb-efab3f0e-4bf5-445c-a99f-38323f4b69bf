@@ -4,6 +4,7 @@
 <h1>成片字幕行</h1>
 <p class="hint">
   已保存的成片字幕行，按成片时间排序。每行同时给出成片时间与原片时间。
+  「未核看区间」是该行在成片中尚未被任何核看登记覆盖的部分；点「已核看」即登记该行在原片中露出的区间（含起点、不含终点）。
   当前库内：原片字幕 {{ counts.subtitles }} 条，选段 {{ counts.selections }} 段。
   {% if counts.subtitles == 0 or counts.selections == 0 %}
     请先到<a href="/upload">上传页</a>导入 CSV 或载入样例。
@@ -16,7 +17,7 @@
       <th>#</th><th>段</th><th>素材号</th><th>字幕号</th>
       <th>成片起</th><th>成片止</th>
       <th>原片起</th><th>原片止</th>
-      <th>裁切</th><th>正文</th><th></th>
+      <th>裁切</th><th>正文</th><th>未核看区间（成片）</th><th>核看</th><th></th>
     </tr>
   </thead>
   <tbody>
@@ -36,6 +37,24 @@
         {% if not r.start_clipped and not r.end_clipped %}—{% endif %}
       </td>
       <td class="text">{{ r.text }}</td>
+      <td class="gaps">
+        {% if r.all_reviewed %}
+          <span class="tag ok">已全部核看</span>
+        {% else %}
+          {% for g in r.gaps %}
+            <div class="gap">{{ g[0]|fmt_ms }} – {{ g[1]|fmt_ms }}<br><small>{{ g[0] }}–{{ g[1] }} ms</small></div>
+          {% endfor %}
+        {% endif %}
+      </td>
+      <td>
+        <form method="post" action="/rows/{{ r.id }}/reviewed">
+          <input type="hidden" name="version" value="{{ r.version }}">
+          <input type="hidden" name="final_start_ms" value="{{ r.final_start_ms }}">
+          <input type="hidden" name="final_end_ms" value="{{ r.final_end_ms }}">
+          <button type="submit" class="btn-small" {% if r.all_reviewed %}disabled title="该行已全部核看"{% endif %}>已核看</button>
+        </form>
+        <a class="link" href="/reviews/{{ r.material_id }}/{{ r.subtitle_no }}">登记明细{% if r.mark_count %}（{{ r.mark_count }}）{% endif %}</a>
+      </td>
       <td><a class="btn" href="/rows/{{ r.id }}">校时</a></td>
     </tr>
     {% endfor %}

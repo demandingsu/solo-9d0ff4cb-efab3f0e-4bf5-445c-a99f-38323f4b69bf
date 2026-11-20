@@ -24,7 +24,8 @@ def list_final_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT fr.*, s.offset_ms AS seg_final_start,
-               s.offset_ms + (s.end_ms - s.start_ms) AS seg_final_end
+               s.offset_ms + (s.end_ms - s.start_ms) AS seg_final_end,
+               s.start_ms AS sel_src_start, s.end_ms AS sel_src_end
         FROM final_rows fr
         JOIN selections s ON s.seq = fr.selection_seq
         ORDER BY fr.final_start_ms, fr.id
@@ -71,7 +72,98 @@ def snapshot(conn: sqlite3.Connection) -> dict:
             "SELECT * FROM selections ORDER BY seq")],
         "final_rows": [dict(r) for r in conn.execute(
             "SELECT * FROM final_rows ORDER BY final_start_ms, id")],
+        "review_marks": [dict(r) for r in conn.execute(
+            "SELECT * FROM review_marks ORDER BY material_id, subtitle_no, src_start_ms, id")],
     }
+
+
+# ---------- 核看登记：区间运算 ----------
+
+def merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """把若干 [start, end) 区间合并成不重叠、按起点排序的区间列表。"""
+    merged: list[list[int]] = []
+    for s, e in sorted(intervals):
+        if merged and s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    return [(s, e) for s, e in merged]
+
+
+def subtract_intervals(
+    start: int, end: int, covered: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """[start, end) 中未被 covered（已合并排序）覆盖的部分，即缺口。"""
+    gaps: list[tuple[int, int]] = []
+    cur = start
+    for s, e in covered:
+        if e <= cur:
+            continue
+        if s > cur:
+            gaps.append((cur, min(s, end)))
+        cur = max(cur, e)
+        if cur >= end:
+            break
+    if cur < end:
+        gaps.append((cur, end))
+    return gaps
+
+
+def _visible_src_interval(row: sqlite3.Row) -> tuple[int, int]:
+    """成片行在原片中露出的区间（含起点、不含终点）。
+
+    用行重算时存下的原字幕起止快照与所在段切点求交；已提交状态下该快照
+    与原字幕现值一致（校时与行重算在同一事务提交）。
+    """
+    return (
+        max(row["src_start_ms"], row["sel_src_start"]),
+        min(row["src_end_ms"], row["sel_src_end"]),
+    )
+
+
+def rows_review_status(conn: sqlite3.Connection) -> list[dict]:
+    """成片行 + 核看状态：每行附带尚未核看的成片时间区间（缺口）。
+
+    同一原字幕的多笔登记先合并成并集，再与该行的原片可见区间求差；
+    缺口最后换算成本段成片时间。调用方需在只读事务内调用，保证行与
+    缺口来自同一已提交状态。
+    """
+    rows = list_final_rows(conn)
+    marks_by_sub: dict[tuple, list[tuple[int, int]]] = {}
+    for m in conn.execute(
+        "SELECT material_id, subtitle_no, src_start_ms, src_end_ms FROM review_marks"
+    ):
+        marks_by_sub.setdefault((m["material_id"], m["subtitle_no"]), []).append(
+            (m["src_start_ms"], m["src_end_ms"])
+        )
+    versions = {
+        (s["material_id"], s["subtitle_no"]): s["version"]
+        for s in conn.execute("SELECT material_id, subtitle_no, version FROM source_subtitles")
+    }
+
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        key = (r["material_id"], r["subtitle_no"])
+        merged = merge_intervals(marks_by_sub.get(key, []))
+        vis_s, vis_e = _visible_src_interval(r)
+        if vis_s < vis_e:
+            gaps_src = subtract_intervals(vis_s, vis_e, merged)
+        else:
+            gaps_src = []
+        # 原片时刻 -> 本段成片时刻：final = 段成片起点 + (原片时刻 - 段原片起点)
+        d["visible_src_start"] = vis_s
+        d["visible_src_end"] = vis_e
+        d["gaps"] = [
+            [r["seg_final_start"] + (g0 - r["sel_src_start"]),
+             r["seg_final_start"] + (g1 - r["sel_src_start"])]
+            for g0, g1 in gaps_src
+        ]
+        d["all_reviewed"] = not gaps_src
+        d["version"] = versions.get(key)
+        d["mark_count"] = len(marks_by_sub.get(key, []))
+        out.append(d)
+    return out
 
 
 # ---------- 重算 ----------
@@ -180,7 +272,9 @@ def rebuild_all(conn: sqlite3.Connection) -> None:
 
 
 def replace_source(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    """整体替换原片字幕。原稿变了，所有核看登记一并清空（载入样例同）。"""
     conn.execute("DELETE FROM source_subtitles")
+    conn.execute("DELETE FROM review_marks")
     conn.executemany(
         "INSERT INTO source_subtitles (material_id, subtitle_no, start_ms, end_ms, text)"
         " VALUES (?,?,?,?,?)",
@@ -189,7 +283,11 @@ def replace_source(conn: sqlite3.Connection, rows: list[dict]) -> None:
 
 
 def replace_selections(conn: sqlite3.Connection, rows: list[dict]) -> None:
-    """选段按给定顺序首尾相接，重算每段在成片中的偏移。"""
+    """选段按给定顺序首尾相接，重算每段在成片中的偏移。
+
+    核看登记挂在原字幕的原片区间上，与选段无关：重传选段后不清登记，
+    新算出的成片行按原片区间自动沿用。
+    """
     conn.execute("DELETE FROM selections")
     offset = 0
     for i, r in enumerate(rows, start=1):
@@ -199,6 +297,85 @@ def replace_selections(conn: sqlite3.Connection, rows: list[dict]) -> None:
             (i, r["material_id"], r["start_ms"], r["end_ms"], offset),
         )
         offset += r["end_ms"] - r["start_ms"]
+
+
+# ---------- 核看登记：写入与查询 ----------
+
+def add_review_mark(
+    conn: sqlite3.Connection,
+    row_id: int,
+    expect_version: int,
+    expect_final_start: int,
+    expect_final_end: int,
+) -> dict:
+    """登记「已核看」：把该行在原片中露出的区间记到对应原字幕名下。
+
+    页面读出后若成片行或原字幕已变（行消失、行区间或字幕版本不符），
+    抛 Conflict 拒绝登记并提示刷新。调用方需在事务内调用，失败回滚则
+    不留下任何登记。
+    """
+    row = conn.execute("SELECT * FROM final_rows WHERE id = ?", (row_id,)).fetchone()
+    if row is None:
+        raise Conflict("这条成片行已不存在（可能重传选段后被重算），请刷新列表")
+    if (row["final_start_ms"], row["final_end_ms"]) != (expect_final_start, expect_final_end):
+        raise Conflict("页面所见的成片行已变化，请刷新列表后再登记")
+    sel = conn.execute("SELECT * FROM selections WHERE seq = ?", (row["selection_seq"],)).fetchone()
+    sub = conn.execute(
+        "SELECT * FROM source_subtitles WHERE material_id = ? AND subtitle_no = ?",
+        (row["material_id"], row["subtitle_no"]),
+    ).fetchone()
+    if sel is None or sub is None:
+        raise Conflict("选段或原字幕已变化，请刷新列表")
+    if sub["version"] != expect_version:
+        raise Conflict("这条原字幕在您读取后已被修改，请刷新页面再登记")
+
+    # 只登记该行在原片中露出的区间（含起点、不含终点），以服务端现算为准
+    vis_start = max(sub["start_ms"], sel["start_ms"])
+    vis_end = min(sub["end_ms"], sel["end_ms"])
+    if vis_start >= vis_end:
+        raise Conflict("该行在原片中已无可见区间，请刷新列表")
+    cur = conn.execute(
+        "INSERT INTO review_marks (material_id, subtitle_no, src_start_ms, src_end_ms)"
+        " VALUES (?,?,?,?)",
+        (sub["material_id"], sub["subtitle_no"], vis_start, vis_end),
+    )
+    return {
+        "id": cur.lastrowid,
+        "material_id": sub["material_id"],
+        "subtitle_no": sub["subtitle_no"],
+        "src_start_ms": vis_start,
+        "src_end_ms": vis_end,
+    }
+
+
+def get_review_context(
+    conn: sqlite3.Connection, material_id: str, subtitle_no: int
+) -> Optional[dict]:
+    """登记明细页：某条原字幕的全部登记（含该字幕现值）。"""
+    sub = conn.execute(
+        "SELECT * FROM source_subtitles WHERE material_id = ? AND subtitle_no = ?",
+        (material_id, subtitle_no),
+    ).fetchone()
+    if sub is None:
+        return None
+    marks = conn.execute(
+        "SELECT * FROM review_marks WHERE material_id = ? AND subtitle_no = ?"
+        " ORDER BY src_start_ms, id",
+        (material_id, subtitle_no),
+    ).fetchall()
+    return {"sub": sub, "marks": marks}
+
+
+def delete_review_mark(conn: sqlite3.Connection, mark_id: int) -> Optional[sqlite3.Row]:
+    """撤销单笔登记，返回被删的登记；不存在返回 None。
+
+    只删这一笔：同一区间若仍被其他登记覆盖，覆盖状态不变。
+    """
+    mark = conn.execute("SELECT * FROM review_marks WHERE id = ?", (mark_id,)).fetchone()
+    if mark is None:
+        return None
+    conn.execute("DELETE FROM review_marks WHERE id = ?", (mark_id,))
+    return mark
 
 
 # ---------- 单行校时 ----------
@@ -271,9 +448,15 @@ def adjust_row(
         raise Conflict("这条原字幕在您读取后已被修改，请刷新页面再试")
 
     recompute_subtitle(conn, sub["material_id"], sub["subtitle_no"])
+    # 校时成功后该原字幕的原片区间已变，仅它的核看登记失效（同事务，失败一起回滚）
+    cleared = conn.execute(
+        "DELETE FROM review_marks WHERE material_id = ? AND subtitle_no = ?",
+        (sub["material_id"], sub["subtitle_no"]),
+    ).rowcount
     return {
         "material_id": sub["material_id"],
         "subtitle_no": sub["subtitle_no"],
         "start_ms": new_src_start,
         "end_ms": new_src_end,
+        "cleared_marks": cleared,
     }

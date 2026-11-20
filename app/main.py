@@ -56,15 +56,13 @@ def index():
 
 @app.get("/rows", response_class=HTMLResponse)
 def rows_page(request: Request, msg: str = "", err: str = ""):
-    conn = db.connect()
-    try:
-        rows = logic.list_final_rows(conn)
+    # 只读事务：成片行与核看缺口来自同一份已提交快照
+    with db.read_snapshot() as conn:
+        rows = logic.rows_review_status(conn)
         counts = {
             "subtitles": conn.execute("SELECT COUNT(*) c FROM source_subtitles").fetchone()["c"],
             "selections": conn.execute("SELECT COUNT(*) c FROM selections").fetchone()["c"],
         }
-    finally:
-        conn.close()
     return templates.TemplateResponse(
         request,
         "rows.html",
@@ -133,11 +131,76 @@ def save_row(
             request, "edit.html", {"err": str(e), **ctx}, status_code=400
         )
 
+    msg = (
+        f"已保存：原字幕 {result['material_id']} #{result['subtitle_no']} "
+        f"改为 {result['start_ms']}–{result['end_ms']} ms，各段成片行已同步重算"
+    )
+    if result["cleared_marks"]:
+        msg += f"；该字幕的 {result['cleared_marks']} 笔核看登记已失效"
+    return redirect("/rows", msg=msg)
+
+
+# ---------- 核看登记 ----------
+
+@app.post("/rows/{row_id}/reviewed", response_class=HTMLResponse)
+def review_row(
+    request: Request,
+    row_id: int,
+    version: int = Form(...),
+    final_start_ms: int = Form(...),
+    final_end_ms: int = Form(...),
+):
+    try:
+        with db.transaction() as conn:
+            mark = logic.add_review_mark(
+                conn, row_id, version, final_start_ms, final_end_ms
+            )
+    except logic.Conflict as e:
+        # 页面所见行/原字幕已变：拒绝登记（事务已回滚），重读最新状态并提示刷新
+        with db.read_snapshot() as conn:
+            rows = logic.rows_review_status(conn)
+            counts = {
+                "subtitles": conn.execute("SELECT COUNT(*) c FROM source_subtitles").fetchone()["c"],
+                "selections": conn.execute("SELECT COUNT(*) c FROM selections").fetchone()["c"],
+            }
+        return templates.TemplateResponse(
+            request,
+            "rows.html",
+            {"rows": rows, "counts": counts, "msg": "", "err": str(e)},
+            status_code=409,
+        )
     return redirect(
         "/rows",
         msg=(
-            f"已保存：原字幕 {result['material_id']} #{result['subtitle_no']} "
-            f"改为 {result['start_ms']}–{result['end_ms']} ms，各段成片行已同步重算"
+            f"已登记核看：{mark['material_id']} #{mark['subtitle_no']} "
+            f"原片 {mark['src_start_ms']}–{mark['src_end_ms']} ms"
+        ),
+    )
+
+
+@app.get("/reviews/{material_id}/{subtitle_no}", response_class=HTMLResponse)
+def reviews_page(request: Request, material_id: str, subtitle_no: int,
+                 msg: str = "", err: str = ""):
+    with db.read_snapshot() as conn:
+        ctx = logic.get_review_context(conn, material_id, subtitle_no)
+    if ctx is None:
+        return redirect("/rows", err="这条原字幕已不存在，请刷新列表")
+    return templates.TemplateResponse(
+        request, "reviews.html", {"msg": msg, "err": err, **ctx}
+    )
+
+
+@app.post("/reviews/{mark_id}/delete", response_class=HTMLResponse)
+def delete_review(mark_id: int):
+    with db.transaction() as conn:
+        mark = logic.delete_review_mark(conn, mark_id)
+    if mark is None:
+        return redirect("/rows", err="这笔登记已不存在（可能已被撤销），请刷新列表")
+    return redirect(
+        f"/reviews/{mark['material_id']}/{mark['subtitle_no']}",
+        msg=(
+            f"已撤销登记 #{mark_id}（原片 {mark['src_start_ms']}–{mark['src_end_ms']} ms）；"
+            f"仍被其他登记覆盖的部分保持已核看"
         ),
     )
 
@@ -214,8 +277,7 @@ def load_sample():
 
 @app.get("/api/state")
 def api_state():
-    conn = db.connect()
-    try:
-        return logic.snapshot(conn)
-    finally:
-        conn.close()
+    with db.read_snapshot() as conn:
+        snap = logic.snapshot(conn)
+        snap["rows"] = logic.rows_review_status(conn)
+    return snap

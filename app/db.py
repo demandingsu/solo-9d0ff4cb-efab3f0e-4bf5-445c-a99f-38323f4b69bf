@@ -4,6 +4,8 @@
 - source_subtitles: 原片字幕（素材号, 字幕号 为主键），version 用于乐观并发控制
 - selections:       选段，按 seq 首尾相接拼成成片，offset_ms 为该段在成片中的起点
 - final_rows:       已保存的成片字幕行（页面读取的就是这张表）
+- review_marks:     核看登记，挂在原字幕上，记录该字幕在原片中已核看的毫秒区间
+                    （含起点、不含终点）；与选段无关，重传选段后按原片区间沿用
 """
 from __future__ import annotations
 
@@ -46,6 +48,19 @@ CREATE TABLE IF NOT EXISTS final_rows (
     text           TEXT    NOT NULL,
     UNIQUE (selection_seq, material_id, subtitle_no)
 );
+
+CREATE TABLE IF NOT EXISTS review_marks (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id  TEXT    NOT NULL,
+    subtitle_no  INTEGER NOT NULL,
+    src_start_ms INTEGER NOT NULL,     -- 已核看的原片区间起点（含）
+    src_end_ms   INTEGER NOT NULL,     -- 已核看的原片区间终点（不含）
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    CHECK (src_start_ms >= 0 AND src_start_ms < src_end_ms)
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_marks_sub
+    ON review_marks (material_id, subtitle_no);
 """
 
 
@@ -77,6 +92,24 @@ def transaction():
     conn = connect()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        yield conn
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+@contextmanager
+def read_snapshot():
+    """只读事务：同一事务内的多次 SELECT 看到同一份已提交快照。
+
+    用于列表页同时读成片行与核看登记，保证“字幕行和缺口来自同一已提交状态”。
+    """
+    conn = connect()
+    try:
+        conn.execute("BEGIN")
         yield conn
         conn.execute("COMMIT")
     except BaseException:
